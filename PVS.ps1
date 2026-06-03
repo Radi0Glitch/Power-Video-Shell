@@ -1,4 +1,4 @@
-﻿#================================================================
+#================================================================
 #Power Video Shell - ASCII вдеопроигрыватель для PowerShell 5.1
 #Зависимости: FFMPEG C:\ffmpeg
 #================================================================
@@ -9,6 +9,76 @@ Add-Type -AssemblyName System.Windows.Forms
 #------------------настройки------------------
 $ffmpegPath = "C:\ffmpeg\bin\ffmpeg.exe"
 $Script:AsciiChar = [char[]]"█▓▒░ "
+
+
+Add-Type -ReferencedAssemblies System.Drawing -TypeDefinition @"
+using System;
+using System.Drawing;
+using System.Drawing.Imaging;
+using System.Runtime.InteropServices;
+using System.Text;
+
+public static class AsciiConv
+{
+    public static string Convert(string path, char[] chars, bool normalize)
+    {
+        using(Bitmap bmp = new Bitmap(path))
+        {
+            int w = bmp.Width, h = bmp.Height;
+            Rectangle rect = new Rectangle(0, 0, w, h);
+            BitmapData data = bmp.LockBits(rect, ImageLockMode.ReadOnly, PixelFormat.Format24bppRgb);
+            int stride = data.Stride;
+            byte[] bytes = new byte[stride * h];
+            Marshal.Copy(data.Scan0, bytes, 0, bytes.Length);
+            bmp.UnlockBits(data);
+
+            int clenM1 = chars.Length - 1;
+            int[] lum = new int[w * h];
+            int minL = 255, maxL = 0;
+
+            for(int y = 0; y < h; y++)
+            {
+                int row = y * stride;
+                int rowOut = y * w;
+
+                for(int x = 0; x < w; x++)
+                {
+                    int i = row + x * 3;
+                    int L = (2126 * bytes[i+2] + 7152 * bytes[i+1] + 722 * bytes[i]) / 1000;
+                    lum[rowOut + x] = L;
+                    if(L < minL) {minL = L;}
+                    if(L > maxL) {maxL = L;}
+                }
+            }
+
+            int range;
+            if(normalize && (maxL - minL) >= 1)
+            {
+                range = maxL-minL;
+            }
+            else
+            {
+                minL = 0; range = 255;
+            }
+
+            StringBuilder sb = new StringBuilder((w + 1) * h);
+            for(int y = 0; y < h; y++)
+            {
+                int rowOut = y * w;
+                for(int x = 0; x < w; x++)
+                {
+                    int norm = ((lum[rowOut + x] - minL) * clenM1) / range;
+                    if(norm < 0){norm = 0;}
+                    if(norm > clenM1) {norm = clenM1;}
+                    sb.Append(chars[norm]);
+                }
+                sb.Append('\n');
+            }
+            return sb.ToString();
+        }
+    }
+}
+"@
 
 #================================================================
 #Выбор файла
@@ -110,63 +180,7 @@ function Convert-FrameToAscii
         [switch]$Normalize
     )
 
-    $bmp = New-Object System.Drawing.Bitmap($ImagePath)
-    $w = $bmp.Width
-    $h = $bmp.Height
-
-    $rect = New-Object System.Drawing.Rectangle(0, 0, $w, $h)
-    $data = $bmp.LockBits(
-        $rect,
-        [System.Drawing.Imaging.ImageLockMode]::ReadOnly,
-        [System.Drawing.Imaging.PixelFormat]::Format24bppRgb)
-
-    $stride = $data.Stride
-    $bytes = New-Object byte[] ($stride * $h)
-    [System.Runtime.InteropServices.Marshal]::Copy($data.Scan0, $bytes, 0, $bytes.Length)
-    $bmp.UnlockBits($data)
-    $bmp.Dispose()
-
-    $lum = New-Object double[] ($w * $h)
-    $minL = 255.0
-    $maxL = 0.0
-
-    for($y = 0; $y -lt $h; $y++)
-    {
-        $row = $y * $stride
-        for($x = 0; $x -lt $w; $x++)
-        {
-            $i = $row + $x * 3
-            $L = 0.2126 * $bytes[$i + 2] + 0.7152 * $bytes[$i + 1] + 0.0722 * $bytes[$i]
-            $lum[$y * $w + $x] = $L
-
-            if($L -lt $minL){ $minL = $L }
-            if($L -gt $maxL){ $maxL = $L }
-        }
-    }
-
-
-    $range = $maxL - $minL
-
-    if(-not $Normalize -or $range -lt 1) {$minL = 0.0; $range = 255.0}
-
-    $chars = $Script:AsciiChar
-    $charMax = $chars.Length - 1
-    $sb = New-Object System.Text.StringBuilder(($w * $h + $h))
-
-    for($y = 0; $y -lt $h; $y++)
-    {
-        for($x = 0; $x -lt $w; $x++)
-        {
-            $L = $lum[$y * $w + $x]
-            $norm = ($L - $minL) / $range
-            if($norm -lt 0) {$norm = 0}
-            $idx = [int]($norm * $charMax)
-            [void]$sb.Append($chars[$idx])
-        }
-        [void]$sb.Append("`n")
-    }
-
-    return $sb.ToString()
+    return [AsciiConv]::Convert($ImagePath, $Script:AsciiChar, [bool]$Normalize)
 }
 
 #================================================================
@@ -372,4 +386,5 @@ function Show-Menu {
 # ============================================================
 # Точка входа
 # ============================================================
+
 Show-Menu
