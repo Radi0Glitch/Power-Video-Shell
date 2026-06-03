@@ -266,9 +266,7 @@ function Convert-VideoToAscii
 # Воспроизведение .asciivid
 # ============================================================
 function Play-AsciiVideo {
-    param(
-        [string]$Path
-    )
+    param([string]$Path)
 
     if (-not $Path) {
         $Path = Select-AsciiVideoFile
@@ -278,48 +276,58 @@ function Play-AsciiVideo {
         Write-Host "Файл не найден: $Path" -ForegroundColor Red; return
     }
 
-    Write-Host "Загружаю..." -ForegroundColor Cyan
-    $lines = [System.IO.File]::ReadAllLines($Path, [System.Text.Encoding]::UTF8)
-
-    $header = $lines[0].Split('|')
-    if ($header[0] -ne 'ASCIIVID') {
-        Write-Host "Неверный формат файла" -ForegroundColor Red; return
-    }
-    $fps = [int]$header[1]
-    $delayMs = [int](1000 / $fps)
-
-    # Собираем кадры
-    $frames = New-Object 'System.Collections.Generic.List[string]'
-    $sb = New-Object System.Text.StringBuilder
-    for ($i = 1; $i -lt $lines.Length; $i++) {
-        if ($lines[$i] -eq '---FRAME---') {
-            if ($sb.Length -gt 0) {
-                [void]$frames.Add($sb.ToString()); [void]$sb.Clear()
-            }
-        } else {
-            [void]$sb.AppendLine($lines[$i])
-        }
-    }
-    if ($sb.Length -gt 0) { [void]$frames.Add($sb.ToString().TrimEnd("`r", "`n")) }
-
-    Write-Host "Загружено $($frames.Count) кадров. FPS=$fps. Старт через 1 сек..." -ForegroundColor Green
-    Start-Sleep -Seconds 1
-
-    [Console]::Clear()
-    [Console]::CursorVisible = $false
-
+    $reader = New-Object System.IO.StreamReader($Path, [System.Text.Encoding]::Unicode)
     try {
-        $sw = [System.Diagnostics.Stopwatch]::StartNew()
-        for ($i = 0; $i -lt $frames.Count; $i++) {
-            [Console]::SetCursorPosition(0, 0)
-            [Console]::Out.Write($frames[$i])
+        # Заголовок
+        $headerLine = $reader.ReadLine()
+        $header = $headerLine.Split('|')
+        if ($header[0] -ne 'ASCIIVID') {
+            Write-Host "Неверный формат файла" -ForegroundColor Red; return
+        }
+        $fps     = [int]$header[1]
+        $total   = [int]$header[2]
+        $delayMs = [int](1000 / $fps)
 
-            $targetMs = ($i + 1) * $delayMs
-            $waitMs = $targetMs - $sw.ElapsedMilliseconds
-            if ($waitMs -gt 0) { Start-Sleep -Milliseconds $waitMs }
+        Write-Host "FPS=$fps, кадров=$total. Старт через 1 сек..." -ForegroundColor Green
+        Start-Sleep -Seconds 1
+
+        [Console]::Clear()
+        [Console]::CursorVisible = $false
+
+        $sb = New-Object System.Text.StringBuilder
+        $frameIndex = 0
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+
+        # Пропускаем первый "---FRAME---"
+        $reader.ReadLine() | Out-Null
+
+        while (-not $reader.EndOfStream) {
+            $line = $reader.ReadLine()
+            if ($line -eq '---FRAME---') {
+                # Выводим накопленный кадр
+                if ($sb.Length -gt 0) {
+                    [Console]::SetCursorPosition(0, 0)
+                    [Console]::Out.Write($sb.ToString().TrimEnd("`r","`n"))
+                    [void]$sb.Clear()
+                    $frameIndex++
+
+                    $targetMs = $frameIndex * $delayMs
+                    $waitMs   = $targetMs - $sw.ElapsedMilliseconds
+                    if ($waitMs -gt 0) { Start-Sleep -Milliseconds $waitMs }
+                }
+            } else {
+                [void]$sb.AppendLine($line)
+            }
+        }
+
+        # Последний кадр
+        if ($sb.Length -gt 0) {
+            [Console]::SetCursorPosition(0, 0)
+            [Console]::Out.Write($sb.ToString().TrimEnd("`r","`n"))
         }
     }
     finally {
+        $reader.Close()
         [Console]::CursorVisible = $true
         [Console]::SetCursorPosition(0, [Console]::WindowHeight - 1)
         Write-Host "`nВоспроизведение завершено." -ForegroundColor Green
